@@ -49,10 +49,15 @@ function removeUrls(message: string): string {
 }
 
 let connectedClients = 0;
+
+// Map to store the last message timestamp for each socket
+const lastMessageTimestamp = new Map<string, number>();
+
 io.on("connection", (socket: Socket) => {
   console.log(`User ${socket.id} Connected`);
   connectedClients += 1;
   io.emit("connectedUsers", connectedClients);
+
   socket.on("message", async ({ token, message }: MessagePayload) => {
     try {
       const {
@@ -72,6 +77,20 @@ io.on("connection", (socket: Socket) => {
       if (!isAdmin) {
         UserMessage = removeUrls(UserMessage);
       }
+
+      const currentTime = Date.now();
+      const lastTime = lastMessageTimestamp.get(socket.id) || 0;
+
+      if (currentTime - lastTime < 3000) {
+        // If the last message was sent within the last 3 seconds, return an error
+        socket.emit("error", {
+          message: "You can only send one message every 3 seconds",
+        });
+        return;
+      }
+
+      // Update the last message timestamp
+      lastMessageTimestamp.set(socket.id, currentTime);
 
       const newMessage = new MessagesModel({
         id: Math.floor(Math.random() * 9999999),
@@ -97,6 +116,7 @@ io.on("connection", (socket: Socket) => {
     connectedClients -= 1;
     console.log(`User ${socket.id} Disconnected`);
     io.emit("connectedUsers", connectedClients);
+    lastMessageTimestamp.delete(socket.id); // Clean up the timestamp map
   });
 });
 
