@@ -5,7 +5,11 @@ import jwt, { JwtPayload } from "jsonwebtoken";
 import dotenv from "dotenv";
 import MessagesModel from "./Models/MessageModel";
 import ConnectToDB from "./Models/db";
+import xss from "xss";
 dotenv.config();
+
+import { BadWords } from "./BadWords";
+import filterBadWords from "./FilterBadWords";
 
 const app = express();
 const httpServer = createServer(app);
@@ -77,7 +81,7 @@ io.on("connection", (socket: Socket) => {
       if (!isAdmin) {
         UserMessage = removeUrls(UserMessage);
       }
-
+      UserMessage = filterBadWords(UserMessage);
       const currentTime = Date.now();
       const lastTime = lastMessageTimestamp.get(socket.id) || 0;
 
@@ -97,12 +101,12 @@ io.on("connection", (socket: Socket) => {
         name: userName,
         senderId: userId,
         avatar: avatar,
-        message: UserMessage,
+        message: xss(UserMessage),
       });
 
       await newMessage.save();
 
-      socket.broadcast.emit("message", newMessage);
+      socket.broadcast.emit("message", xss(newMessage));
     } catch (error) {
       console.error(
         "Error verifying token:",
