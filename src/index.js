@@ -42,7 +42,10 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const MessageModel_1 = __importDefault(require("./Models/MessageModel"));
 const db_1 = __importDefault(require("./Models/db"));
+const xss_1 = __importDefault(require("xss"));
 dotenv_1.default.config();
+const FilterBadWords_1 = __importDefault(require("./FilterBadWords"));
+const UserModel_1 = __importDefault(require("./Models/UserModel"));
 const app = (0, express_1.default)();
 const httpServer = (0, http_1.createServer)(app);
 const port = 3002;
@@ -62,11 +65,22 @@ function removeUrls(message) {
     // Remove URLs from the message using replace method
     return message.replace(urlRegex, "");
 }
-let connectedClients = 0;
-io.on("connection", (socket) => {
-    console.log(`User ${socket.id} Connected`);
-    connectedClients += 1;
-    io.emit("connectedUsers", connectedClients);
+const getTotalUsersCount = () => __awaiter(void 0, void 0, void 0, function* () {
+    const users = yield UserModel_1.default.find({});
+    return users && users.length > 0 ? users.length : 1;
+});
+let connectedClients = new Map();
+// Map to store the last message timestamp for each socket
+const lastMessageTimestamp = new Map();
+io.on("connection", (socket) => __awaiter(void 0, void 0, void 0, function* () {
+    let totalUsers = yield getTotalUsersCount();
+    // console.log(`User ${socket.id} Connected`);
+    io.emit("totalUsers", totalUsers);
+    socket.on("userJoined", () => {
+        console.log(`New User Joined : Current Connected Users : ${connectedClients.size}`);
+        connectedClients.set(socket.id, "connected");
+        io.emit("connectedUsers", connectedClients.size);
+    });
     socket.on("message", ({ token, message }) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id: userId, name: userName, isAdmin, } = jsonwebtoken_1.default.verify(token, JWT_SECRET_KEY);
@@ -74,27 +88,49 @@ io.on("connection", (socket) => {
             if (!isAdmin) {
                 UserMessage = removeUrls(UserMessage);
             }
+            UserMessage = (0, FilterBadWords_1.default)(UserMessage);
+            const currentTime = Date.now();
+            const lastTime = lastMessageTimestamp.get(socket.id) || 0;
+            if (currentTime - lastTime < 3000) {
+                // If the last message was sent within the last 3 seconds, return an error
+                socket.emit("error", {
+                    message: "You can only send one message every 3 seconds",
+                });
+                return;
+            }
+            // Update the last message timestamp
+            lastMessageTimestamp.set(socket.id, currentTime);
             const newMessage = new MessageModel_1.default({
                 id: Math.floor(Math.random() * 9999999),
                 name: userName,
                 senderId: userId,
                 avatar: avatar,
-                message: UserMessage,
+                message: (0, xss_1.default)(UserMessage),
             });
             yield newMessage.save();
-            socket.broadcast.emit("message", newMessage);
+            socket.broadcast.emit("message", (0, xss_1.default)(newMessage));
         }
         catch (error) {
             console.error("Error verifying token:", error instanceof Error ? error.message : error);
             socket.emit("error", { message: "Invalid token" });
         }
     }));
-    socket.on("disconnect", () => {
-        connectedClients -= 1;
-        console.log(`User ${socket.id} Disconnected`);
-        io.emit("connectedUsers", connectedClients);
+    socket.on("userDisconnect", () => {
+        if (connectedClients.has(socket.id)) {
+            connectedClients.delete(socket.id);
+        }
+        console.log(`User Leaved : Current Connected Users : ${connectedClients.size}`);
+        io.emit("connectedUsers", connectedClients.size);
     });
-});
+    socket.on("disconnect", () => {
+        lastMessageTimestamp.delete(socket.id); // Clean up the timestamp map
+        if (connectedClients.has(socket.id)) {
+            connectedClients.delete(socket.id);
+        }
+        console.log(`User Leaved : Current Connected Users : ${connectedClients.size}`);
+        io.emit("connectedUsers", connectedClients.size);
+    });
+}));
 app.get("/", (req, res) => {
     const domain = req.headers.host;
     res.json({
