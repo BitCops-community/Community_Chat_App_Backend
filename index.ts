@@ -10,6 +10,7 @@ dotenv.config();
 
 import { BadWords } from "./BadWords";
 import filterBadWords from "./FilterBadWords";
+import User from "./Models/UserModel";
 
 const app = express();
 const httpServer = createServer(app);
@@ -52,15 +53,30 @@ function removeUrls(message: string): string {
   return message.replace(urlRegex, "");
 }
 
-let connectedClients = 0;
+const getTotalUsersCount = async (): Promise<number> => {
+  const users = await User.find({});
+
+  return users && users.length > 0 ? users.length : 1;
+};
+
+let connectedClients = new Map<string, string>();
 
 // Map to store the last message timestamp for each socket
 const lastMessageTimestamp = new Map<string, number>();
 
-io.on("connection", (socket: Socket) => {
-  console.log(`User ${socket.id} Connected`);
-  connectedClients += 1;
-  io.emit("connectedUsers", connectedClients);
+io.on("connection", async (socket: Socket) => {
+  let totalUsers = await getTotalUsersCount();
+  // console.log(`User ${socket.id} Connected`);
+
+  io.emit("totalUsers", totalUsers);
+
+  socket.on("userJoined", () => {
+    console.log(
+      `New User Joined : Current Connected Users : ${connectedClients.size}`,
+    );
+    connectedClients.set(socket.id, "connected");
+    io.emit("connectedUsers", connectedClients.size);
+  });
 
   socket.on("message", async ({ token, message }: MessagePayload) => {
     try {
@@ -110,17 +126,31 @@ io.on("connection", (socket: Socket) => {
     } catch (error) {
       console.error(
         "Error verifying token:",
-        error instanceof Error ? error.message : error
+        error instanceof Error ? error.message : error,
       );
       socket.emit("error", { message: "Invalid token" });
     }
   });
 
+  socket.on("userDisconnect", () => {
+    if (connectedClients.has(socket.id)) {
+      connectedClients.delete(socket.id);
+    }
+    console.log(
+      `User Leaved : Current Connected Users : ${connectedClients.size}`,
+    );
+    io.emit("connectedUsers", connectedClients.size);
+  });
+
   socket.on("disconnect", () => {
-    connectedClients -= 1;
-    console.log(`User ${socket.id} Disconnected`);
-    io.emit("connectedUsers", connectedClients);
     lastMessageTimestamp.delete(socket.id); // Clean up the timestamp map
+    if (connectedClients.has(socket.id)) {
+      connectedClients.delete(socket.id);
+    }
+    console.log(
+      `User Leaved : Current Connected Users : ${connectedClients.size}`,
+    );
+    io.emit("connectedUsers", connectedClients.size);
   });
 });
 
